@@ -97,5 +97,5 @@ void main() {
       expect(await FlutterDragOut.start(['/tmp/a.txt']), isFalse);
       expect(FlutterDragOut.inProgress, isFalse);
     });
-  }, skip: !(Platform.isMacOS || Platform.isWindows));
+  }, skip: !(Platform.isMacOS || Platform.isWindows || Platform.isLinux));
 }

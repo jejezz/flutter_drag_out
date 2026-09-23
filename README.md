@@ -1,5 +1,7 @@
 # flutter_drag_out
 
+[![build](https://github.com/jejezz/flutter_drag_out/actions/workflows/build.yml/badge.svg)](https://github.com/jejezz/flutter_drag_out/actions/workflows/build.yml)
+
 Drag files and folders out of a Flutter desktop app into Finder, Explorer or
 any other application — without replacing Flutter's own drag and drop.
 
@@ -37,25 +39,32 @@ session carrying file paths.
 
 ## Platform support
 
-| Platform | Status | Native API |
-|---|---|---|
-| macOS 10.15+ | ✅ Supported | `NSDraggingSession` |
-| Windows 10+ | ✅ Supported | OLE `DoDragDrop` (`CF_HDROP`) |
-| Linux | 🚧 Planned | GTK drag source (`text/uri-list`) |
+| Platform | Status | Native API | Since |
+|---|---|---|---|
+| macOS 10.15+ | ✅ Supported | `NSDraggingSession` | 0.1.0 |
+| Windows 10+ | 🧪 Beta | OLE `DoDragDrop` (`CF_HDROP`) | 0.2.0 |
+| Linux (GTK 3, X11 / Wayland) | 🧪 Beta | `gtk_drag_begin` (`text/uri-list`) | 0.3.0 |
+
+**Beta** means the implementation builds in CI on every push (see
+[`.github/workflows/build.yml`](.github/workflows/build.yml)) but has not yet
+been verified by hand on real hardware. Bug reports are welcome — please
+include the OS version (and X11 or Wayland on Linux).
 
 ## Installation
 
-The package is not on pub.dev yet. Add it as a git dependency pinned to a tag:
+The package is not on pub.dev yet. Add it as a git dependency pinned to a
+release tag (see [CHANGELOG](CHANGELOG.md) for what each version adds):
 
 ```yaml
 dependencies:
   flutter_drag_out:
     git:
       url: https://github.com/jejezz/flutter_drag_out.git
-      ref: v0.2.0
+      ref: v0.3.0
 ```
 
-No native setup is required; the plugin registers itself.
+No native setup is required; the plugin registers itself. On Linux, building
+needs the usual Flutter desktop packages (`libgtk-3-dev` etc.).
 
 ## Usage
 
@@ -142,10 +151,12 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
    the native side to start an OS drag session with the file paths. This
    works because Flutter keeps receiving pointer moves outside the window
    while the button is held (macOS delivers them to the window; on Windows the
-   Flutter embedder captures the mouse on button down). On macOS the session
+   Flutter embedder captures the mouse on button down; on Linux GTK keeps an
+   implicit grab). On macOS the session
    reuses the latest mouse-dragged event, since the OS requires one; on
    Windows the modal `DoDragDrop` loop is started from a posted message, not
-   from inside the method call.
+   from inside the method call; on Linux the drag also reuses the latest
+   motion event (Wayland requires its serial).
 3. The OS drag loop now owns the mouse, so Flutter would never receive the
    mouse-up. The plugin immediately synthesizes one at the pointer position
    outside the window. Nothing accepts the drop there, so your Flutter drag
@@ -170,12 +181,12 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
 ## Example
 
 The [`example/`](example/lib/main.dart) app lists a few sample files. Drop them
-on the in-app target, or drag them out to Finder — alone or several at once
+on the in-app target, or drag them out to Finder / Explorer / your file manager — alone or several at once
 (tick the checkboxes).
 
 ```sh
 cd example
-flutter run -d macos    # or: flutter run -d windows
+flutter run -d macos    # or: -d windows, -d linux
 ```
 
 ## Why not `super_drag_and_drop`?
