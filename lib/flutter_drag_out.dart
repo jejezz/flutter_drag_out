@@ -25,7 +25,7 @@ abstract final class FlutterDragOut {
   /// Whether this platform has a native implementation.
   ///
   /// On other platforms every call is a no-op that returns `false`.
-  static bool get isSupported => !kIsWeb && (Platform.isMacOS || Platform.isWindows);
+  static bool get isSupported => !kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux);
 
   /// Whether a drag session started by this plugin is still running.
   ///
