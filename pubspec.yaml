@@ -1,6 +1,6 @@
 name: flutter_drag_out
 description: "Drag files out of a Flutter desktop app into Finder/Explorer via a native OS drag session, alongside Flutter's own Draggable and existing drag-in handlers."
-version: 0.1.0
+version: 0.2.0
 homepage: https://github.com/jejezz/flutter_drag_out
 repository: https://github.com/jejezz/flutter_drag_out
 
@@ -36,6 +36,8 @@ flutter:
     platforms:
       macos:
         pluginClass: FlutterDragOutPlugin
+      windows:
+        pluginClass: FlutterDragOutPluginCApi
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:

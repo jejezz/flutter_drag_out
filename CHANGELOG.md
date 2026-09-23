@@ -1,3 +1,11 @@
+## 0.2.0
+
+* Windows implementation: OLE `DoDragDrop` with `CF_HDROP` (files and
+  folders), copy-only, drops back onto the app's own window rejected, shell
+  icon as the drag image, synthesized `WM_LBUTTONUP` so the triggering Flutter
+  drag ends cleanly.
+* CI builds the example on macOS and Windows.
+
 ## 0.1.0
 
 * Initial release: macOS implementation.
