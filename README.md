@@ -1,5 +1,7 @@
 # flutter_drag_out
 
+[![build](https://github.com/jejezz/flutter_drag_out/actions/workflows/build.yml/badge.svg)](https://github.com/jejezz/flutter_drag_out/actions/workflows/build.yml)
+
 Drag files and folders out of a Flutter desktop app into Finder, Explorer or
 any other application — without replacing Flutter's own drag and drop.
 
@@ -37,15 +39,21 @@ session carrying file paths.
 
 ## Platform support
 
-| Platform | Status | Native API |
-|---|---|---|
-| macOS 10.15+ | ✅ Supported | `NSDraggingSession` |
-| Windows 10+ | ✅ Supported | OLE `DoDragDrop` (`CF_HDROP`) |
-| Linux (GTK 3) | ✅ Supported | `gtk_drag_begin` (`text/uri-list`) |
+| Platform | Status | Native API | Since |
+|---|---|---|---|
+| macOS 10.15+ | ✅ Supported | `NSDraggingSession` | 0.1.0 |
+| Windows 10+ | 🧪 Beta | OLE `DoDragDrop` (`CF_HDROP`) | 0.2.0 |
+| Linux (GTK 3, X11 / Wayland) | 🧪 Beta | `gtk_drag_begin` (`text/uri-list`) | 0.3.0 |
+
+**Beta** means the implementation builds in CI on every push (see
+[`.github/workflows/build.yml`](.github/workflows/build.yml)) but has not yet
+been verified by hand on real hardware. Bug reports are welcome — please
+include the OS version (and X11 or Wayland on Linux).
 
 ## Installation
 
-The package is not on pub.dev yet. Add it as a git dependency pinned to a tag:
+The package is not on pub.dev yet. Add it as a git dependency pinned to a
+release tag (see [CHANGELOG](CHANGELOG.md) for what each version adds):
 
 ```yaml
 dependencies:
@@ -55,7 +63,8 @@ dependencies:
       ref: v0.3.0
 ```
 
-No native setup is required; the plugin registers itself.
+No native setup is required; the plugin registers itself. On Linux, building
+needs the usual Flutter desktop packages (`libgtk-3-dev` etc.).
 
 ## Usage
 
