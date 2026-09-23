@@ -40,7 +40,7 @@ session carrying file paths.
 | Platform | Status | Native API |
 |---|---|---|
 | macOS 10.15+ | ✅ Supported | `NSDraggingSession` |
-| Windows | 🚧 Planned | `DoDragDrop` (`CF_HDROP`) |
+| Windows 10+ | ✅ Supported | OLE `DoDragDrop` (`CF_HDROP`) |
 | Linux | 🚧 Planned | GTK drag source (`text/uri-list`) |
 
 ## Installation
@@ -52,7 +52,7 @@ dependencies:
   flutter_drag_out:
     git:
       url: https://github.com/jejezz/flutter_drag_out.git
-      ref: v0.1.0
+      ref: v0.2.0
 ```
 
 No native setup is required; the plugin registers itself.
@@ -139,8 +139,13 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
 
 1. The user drags with your Flutter `Draggable` as usual.
 2. When `onDragUpdate` reports a position outside the window, the plugin asks
-   the native side to start an OS drag session with the file URLs. On macOS
-   this reuses the latest mouse-dragged event, since the OS requires one.
+   the native side to start an OS drag session with the file paths. This
+   works because Flutter keeps receiving pointer moves outside the window
+   while the button is held (macOS delivers them to the window; on Windows the
+   Flutter embedder captures the mouse on button down). On macOS the session
+   reuses the latest mouse-dragged event, since the OS requires one; on
+   Windows the modal `DoDragDrop` loop is started from a posted message, not
+   from inside the method call.
 3. The OS drag loop now owns the mouse, so Flutter would never receive the
    mouse-up. The plugin immediately synthesizes one at the pointer position
    outside the window. Nothing accepts the drop there, so your Flutter drag
@@ -158,6 +163,9 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
 - **Copy only.** Moving files to another application is intentionally not
   offered.
 - **macOS sandbox.** Sandboxed apps can drag any file they are able to read.
+- **Windows modal loop.** `DoDragDrop` runs a modal loop on the platform
+  thread until the drop; the app keeps processing messages but stays in that
+  loop for the duration of the drag.
 
 ## Example
 
@@ -167,7 +175,7 @@ on the in-app target, or drag them out to Finder — alone or several at once
 
 ```sh
 cd example
-flutter run -d macos
+flutter run -d macos    # or: flutter run -d windows
 ```
 
 ## Why not `super_drag_and_drop`?

@@ -32,7 +32,7 @@ void main() {
 
   const viewSize = Size(800, 600);
 
-  group('on macOS', () {
+  group('on a supported platform', () {
     test('does nothing while the pointer is inside the window', () {
       FlutterDragOut.maybeStartOnExit(
         const Offset(400, 300),
@@ -97,5 +97,5 @@ void main() {
       expect(await FlutterDragOut.start(['/tmp/a.txt']), isFalse);
       expect(FlutterDragOut.inProgress, isFalse);
     });
-  }, skip: !Platform.isMacOS);
+  }, skip: !(Platform.isMacOS || Platform.isWindows));
 }
