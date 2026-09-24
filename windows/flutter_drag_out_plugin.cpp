@@ -179,6 +179,43 @@ void SetDragImage(IDataObject* data_object, const std::wstring& path) {
   helper->Release();
 }
 
+// Accepts {session, items: [{type: "path", path}]}, or the pre-0.4.0 bare
+// list of paths (|session| stays null). Fails for anything else, including
+// item types this version does not know.
+bool ParseStartDrag(const flutter::EncodableValue* arguments,
+                    flutter::EncodableValue* session,
+                    std::vector<std::string>* paths) {
+  if (!arguments) return false;
+  if (const auto* list = std::get_if<flutter::EncodableList>(arguments)) {
+    for (const auto& value : *list) {
+      if (const auto* path = std::get_if<std::string>(&value)) {
+        paths->push_back(*path);
+      }
+    }
+    return true;
+  }
+  const auto* map = std::get_if<flutter::EncodableMap>(arguments);
+  if (!map) return false;
+  const auto items_it = map->find(flutter::EncodableValue("items"));
+  if (items_it == map->end()) return false;
+  const auto* items = std::get_if<flutter::EncodableList>(&items_it->second);
+  if (!items) return false;
+  for (const auto& value : *items) {
+    const auto* item = std::get_if<flutter::EncodableMap>(&value);
+    if (!item) return false;
+    const auto type_it = item->find(flutter::EncodableValue("type"));
+    const auto path_it = item->find(flutter::EncodableValue("path"));
+    if (type_it == item->end() || path_it == item->end()) return false;
+    const auto* type = std::get_if<std::string>(&type_it->second);
+    const auto* path = std::get_if<std::string>(&path_it->second);
+    if (!type || *type != "path" || !path) return false;
+    paths->push_back(*path);
+  }
+  const auto session_it = map->find(flutter::EncodableValue("session"));
+  if (session_it != map->end()) *session = session_it->second;
+  return true;
+}
+
 bool IsPrimaryButtonDown() {
   const int button = ::GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
   return (::GetAsyncKeyState(button) & 0x8000) != 0;
@@ -237,18 +274,17 @@ void FlutterDragOutPlugin::HandleMethodCall(
     result->NotImplemented();
     return;
   }
-  const auto* list =
-      std::get_if<flutter::EncodableList>(method_call.arguments());
-  if (!list) {
-    result->Error("bad_args", "Expected a list of paths");
+  flutter::EncodableValue session;
+  std::vector<std::string> utf8_paths;
+  if (!ParseStartDrag(method_call.arguments(), &session, &utf8_paths)) {
+    result->Error("bad_args", "Expected {session, items}");
     return;
   }
 
   std::vector<std::wstring> paths;
-  for (const auto& value : *list) {
-    const auto* path = std::get_if<std::string>(&value);
-    if (!path || path->empty()) continue;
-    std::wstring wide = Utf8ToWide(*path);
+  for (const auto& path : utf8_paths) {
+    if (path.empty()) continue;
+    std::wstring wide = Utf8ToWide(path);
     for (auto& ch : wide) {
       if (ch == L'/') ch = L'\\';
     }
@@ -262,6 +298,7 @@ void FlutterDragOutPlugin::HandleMethodCall(
   }
 
   pending_paths_ = std::move(paths);
+  pending_session_ = std::move(session);
   drag_queued_ = true;
   ::PostMessageW(message_window_, kStartDragMessage, 0, 0);
   result->Success(flutter::EncodableValue(true));
@@ -285,11 +322,13 @@ void FlutterDragOutPlugin::RunDrag() {
   drag_queued_ = false;
   std::vector<std::wstring> paths = std::move(pending_paths_);
   pending_paths_.clear();
+  const flutter::EncodableValue session = std::move(pending_session_);
+  pending_session_ = flutter::EncodableValue();
 
   // The button may have been released while the message was queued; a drag
   // started now would drop immediately wherever the pointer happens to be.
   if (paths.empty() || !IsPrimaryButtonDown()) {
-    NotifyDragEnded(false);
+    NotifyDragEnded(session, false);
     return;
   }
 
@@ -298,12 +337,12 @@ void FlutterDragOutPlugin::RunDrag() {
   IDataObject* data_object = nullptr;
   if (FAILED(::SHCreateDataObject(nullptr, 0, nullptr, nullptr,
                                   IID_PPV_ARGS(&data_object)))) {
-    NotifyDragEnded(false);
+    NotifyDragEnded(session, false);
     return;
   }
   if (!SetHGlobal(data_object, CF_HDROP, CreateHDrop(paths))) {
     data_object->Release();
-    NotifyDragEnded(false);
+    NotifyDragEnded(session, false);
     return;
   }
 
@@ -346,12 +385,19 @@ void FlutterDragOutPlugin::RunDrag() {
   drop_source->Release();
   data_object->Release();
 
-  NotifyDragEnded(hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE);
+  NotifyDragEnded(session,
+                  hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE);
 }
 
-void FlutterDragOutPlugin::NotifyDragEnded(bool dropped) {
-  channel_->InvokeMethod("dragEnded",
-                         std::make_unique<flutter::EncodableValue>(dropped));
+void FlutterDragOutPlugin::NotifyDragEnded(
+    const flutter::EncodableValue& session, bool dropped) {
+  channel_->InvokeMethod(
+      "dragEnded",
+      std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
+          {flutter::EncodableValue("session"), session},
+          {flutter::EncodableValue("dropped"),
+           flutter::EncodableValue(dropped)},
+      }));
 }
 
 }  // namespace flutter_drag_out

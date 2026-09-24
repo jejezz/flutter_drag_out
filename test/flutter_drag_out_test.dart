@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_drag_out/flutter_drag_out.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,6 +31,12 @@ void main() {
     (_) {},
   );
 
+  Future<void> sendDragEndedFor(int session, {required bool dropped}) => messenger.handlePlatformMessage(
+    channel.name,
+    channel.codec.encodeMethodCall(MethodCall('dragEnded', {'session': session, 'dropped': dropped})),
+    (_) {},
+  );
+
   const viewSize = Size(800, 600);
 
   group('on a supported platform', () {
@@ -50,7 +57,13 @@ void main() {
       );
       await pumpEventQueue();
       expect(calls.single.method, 'startDrag');
-      expect(calls.single.arguments, ['/tmp/a.txt', '/tmp/dir']);
+      expect(calls.single.arguments, {
+        'session': 1,
+        'items': [
+          {'type': 'path', 'path': '/tmp/a.txt'},
+          {'type': 'path', 'path': '/tmp/dir'},
+        ],
+      });
       expect(FlutterDragOut.inProgress, isTrue);
     });
 
@@ -96,6 +109,108 @@ void main() {
       nativeResult = false;
       expect(await FlutterDragOut.start(['/tmp/a.txt']), isFalse);
       expect(FlutterDragOut.inProgress, isFalse);
+    });
+
+    test('keeps the drag in the app when a remote item is mixed in', () async {
+      // The daylight-commander pattern: only all-local selections leave.
+      final locations = [Uri.file('/tmp/a.txt'), Uri.parse('sftp://host/b.txt')];
+      FlutterDragOut.maybeStartOnExit(
+        const Offset(-5, 300),
+        viewSize: viewSize,
+        paths: () => locations.any((l) => l.scheme != 'file') ? null : [for (final l in locations) l.toFilePath()],
+      );
+      await pumpEventQueue();
+      expect(calls, isEmpty);
+      expect(FlutterDragOut.inProgress, isFalse);
+    });
+
+    test('starts a drag with items and numbers sessions', () async {
+      expect(await FlutterDragOut.startItems([const DragOutItem.path('/tmp/a.txt')]), isTrue);
+      await sendDragEndedFor(1, dropped: true);
+      FlutterDragOut.maybeStartOnExit(
+        const Offset(-5, 300),
+        viewSize: viewSize,
+        items: () => [const DragOutItem.path('/tmp/b.txt')],
+      );
+      await pumpEventQueue();
+      expect(calls, hasLength(2));
+      expect(calls.last.arguments, {
+        'session': 2,
+        'items': [
+          {'type': 'path', 'path': '/tmp/b.txt'},
+        ],
+      });
+    });
+
+    test('calls onEnded once with the result, after inProgress clears', () async {
+      final ends = <DragOutEnd>[];
+      bool? inProgressDuringCallback;
+      await FlutterDragOut.startItems(
+        [const DragOutItem.path('/tmp/a.txt')],
+        onEnded: (end) {
+          inProgressDuringCallback = FlutterDragOut.inProgress;
+          ends.add(end);
+        },
+      );
+      expect(ends, isEmpty);
+
+      await sendDragEndedFor(1, dropped: true);
+      await sendDragEndedFor(1, dropped: false); // Duplicate: ignored.
+      expect(ends, [const DragOutEnd(dropped: true)]);
+      expect(inProgressDuringCallback, isFalse);
+    });
+
+    test('passes onEnded through maybeStartOnExit', () async {
+      final ends = <DragOutEnd>[];
+      FlutterDragOut.maybeStartOnExit(
+        const Offset(-5, 300),
+        viewSize: viewSize,
+        paths: () => ['/tmp/a.txt'],
+        onEnded: ends.add,
+      );
+      await pumpEventQueue();
+      await sendDragEndedFor(1, dropped: false);
+      expect(ends, [const DragOutEnd(dropped: false)]);
+    });
+
+    test('accepts the pre-0.4.0 bare bool dragEnded', () async {
+      final ends = <DragOutEnd>[];
+      await FlutterDragOut.startItems([const DragOutItem.path('/tmp/a.txt')], onEnded: ends.add);
+      await sendDragEnded();
+      expect(ends, [const DragOutEnd(dropped: true)]);
+      expect(FlutterDragOut.inProgress, isFalse);
+    });
+
+    test('ignores dragEnded from another session', () async {
+      final ends = <DragOutEnd>[];
+      await FlutterDragOut.startItems([const DragOutItem.path('/tmp/a.txt')], onEnded: ends.add);
+      await sendDragEndedFor(7, dropped: true);
+      expect(ends, isEmpty);
+      expect(FlutterDragOut.inProgress, isTrue);
+    });
+
+    test('does not call onEnded when the session did not start', () async {
+      nativeResult = false;
+      final ends = <DragOutEnd>[];
+      expect(await FlutterDragOut.startItems([const DragOutItem.path('/tmp/a.txt')], onEnded: ends.add), isFalse);
+      await sendDragEndedFor(1, dropped: false);
+      expect(ends, isEmpty);
+    });
+
+    test('reports a throwing onEnded without breaking the session state', () async {
+      final errors = <FlutterErrorDetails>[];
+      final previous = FlutterError.onError;
+      FlutterError.onError = errors.add;
+      addTearDown(() => FlutterError.onError = previous);
+
+      await FlutterDragOut.startItems([const DragOutItem.path('/tmp/a.txt')], onEnded: (_) => throw StateError('boom'));
+      await sendDragEndedFor(1, dropped: true);
+      expect(errors.single.exception, isA<StateError>());
+      expect(FlutterDragOut.inProgress, isFalse);
+    });
+
+    test('does not support promises yet', () {
+      expect(FlutterDragOut.supportsPromises, isFalse);
     });
   }, skip: !(Platform.isMacOS || Platform.isWindows || Platform.isLinux));
 }

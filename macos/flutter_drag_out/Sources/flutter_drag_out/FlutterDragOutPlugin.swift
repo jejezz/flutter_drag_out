@@ -11,6 +11,9 @@ public class FlutterDragOutPlugin: NSObject, FlutterPlugin, NSDraggingSource {
   private let channel: FlutterMethodChannel
   private var lastMouseEvent: NSEvent?
   private var monitor: Any?
+  /// Dart's ID of the running session, echoed back in `dragEnded`. `nil`
+  /// while no session runs or when started with the pre-0.4.0 arguments.
+  private var session: Any?
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "flutter_drag_out", binaryMessenger: registrar.messenger)
@@ -40,14 +43,35 @@ public class FlutterDragOutPlugin: NSObject, FlutterPlugin, NSDraggingSource {
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "startDrag":
-      guard let paths = call.arguments as? [String] else {
-        result(FlutterError(code: "bad_args", message: "Expected a list of paths", details: nil))
+      guard let (session, paths) = Self.parseStartDrag(call.arguments) else {
+        result(FlutterError(code: "bad_args", message: "Expected {session, items}", details: nil))
         return
       }
-      result(startDrag(paths: paths))
+      // Set first: endedAt must find it even if AppKit ended the session
+      // right away.
+      self.session = session
+      let started = startDrag(paths: paths)
+      if !started { self.session = nil }
+      result(started)
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  /// Accepts `{session, items: [{type: "path", path}]}`, or the pre-0.4.0
+  /// bare list of paths. Returns `nil` for anything else, including item
+  /// types this version does not know.
+  private static func parseStartDrag(_ arguments: Any?) -> (session: Any?, paths: [String])? {
+    if let paths = arguments as? [String] { return (nil, paths) }
+    guard let map = arguments as? [String: Any],
+      let items = map["items"] as? [[String: Any]]
+    else { return nil }
+    var paths: [String] = []
+    for item in items {
+      guard item["type"] as? String == "path", let path = item["path"] as? String else { return nil }
+      paths.append(path)
+    }
+    return (map["session"], paths)
   }
 
   private func startDrag(paths: [String]) -> Bool {
@@ -127,6 +151,11 @@ public class FlutterDragOutPlugin: NSObject, FlutterPlugin, NSDraggingSource {
     endedAt screenPoint: NSPoint,
     operation: NSDragOperation
   ) {
-    channel.invokeMethod("dragEnded", arguments: operation != [])
+    let session = self.session
+    self.session = nil
+    channel.invokeMethod(
+      "dragEnded",
+      arguments: ["session": session ?? NSNull(), "dropped": operation != []] as [String: Any]
+    )
   }
 }

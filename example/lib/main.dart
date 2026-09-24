@@ -58,6 +58,11 @@ class _ExamplePageState extends State<ExamplePage> {
                       details.globalPosition,
                       viewSize: viewSize,
                       paths: () => _pathsFor(entity),
+                      onEnded: (end) => setState(
+                        () => _status = end.dropped
+                            ? 'Dropped outside the app: ${_pathsFor(entity).map(_name).join(', ')}'
+                            : 'Drag out cancelled.',
+                      ),
                     ),
                     feedback: Material(
                       elevation: 4,

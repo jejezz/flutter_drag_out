@@ -4,6 +4,7 @@
 // This must be included before many other Windows headers.
 #include <windows.h>
 
+#include <flutter/encodable_value.h>
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
 
@@ -47,7 +48,8 @@ class FlutterDragOutPlugin : public flutter::Plugin {
   // Runs the modal OLE drag loop for |pending_paths_|.
   void RunDrag();
 
-  void NotifyDragEnded(bool dropped);
+  // Tells Dart that the session |session| (Dart's ID, echoed back) ended.
+  void NotifyDragEnded(const flutter::EncodableValue& session, bool dropped);
 
   flutter::PluginRegistrarWindows* registrar_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
@@ -55,6 +57,8 @@ class FlutterDragOutPlugin : public flutter::Plugin {
   bool ole_initialized_ = false;
   bool drag_queued_ = false;
   std::vector<std::wstring> pending_paths_;
+  // Dart's ID of the queued session; null for the pre-0.4.0 arguments.
+  flutter::EncodableValue pending_session_;
 };
 
 }  // namespace flutter_drag_out

@@ -1,3 +1,18 @@
+## 0.4.0
+
+* `onEnded` callback on `maybeStartOnExit` and the new `startItems`: called
+  once per started session with `DragOutEnd(dropped:)`, after `inProgress`
+  has gone back to `false`. It marks the end of the OS drag session, not the
+  end of the target's copy, so don't delete the dragged files right away.
+* `DragOutItem.path` and `FlutterDragOut.startItems(items, onEnded:)`;
+  `maybeStartOnExit` takes `items:` as an alternative to `paths:`.
+* `FlutterDragOut.supportsPromises` (always `false` for now), reserved for
+  file promises (files created after the drop), which later versions add.
+* Fully backwards compatible: `paths:`, `start`, `inProgress` and
+  `isSupported` keep their signatures and behaviour. Internally the method
+  channel now carries a session ID, so a late end notification can't end a
+  newer session.
+
 ## 0.3.0
 
 * Linux implementation (GTK 3): `gtk_drag_begin_with_coordinates` with

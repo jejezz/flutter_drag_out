@@ -32,6 +32,9 @@ struct _FlutterDragOutPlugin {
   GdkDragContext* drag_context;
   gchar** uris;
   gboolean drag_failed;
+  // Dart's ID of the running session, echoed back in `dragEnded`. Null for
+  // the pre-0.4.0 arguments.
+  FlValue* session;
 };
 
 G_DEFINE_TYPE(FlutterDragOutPlugin, flutter_drag_out_plugin, g_object_get_type())
@@ -40,10 +43,16 @@ static void clear_drag(FlutterDragOutPlugin* self) {
   self->drag_context = nullptr;
   g_clear_pointer(&self->uris, g_strfreev);
   self->drag_failed = FALSE;
+  g_clear_pointer(&self->session, fl_value_unref);
 }
 
-static void notify_drag_ended(FlutterDragOutPlugin* self, gboolean dropped) {
-  g_autoptr(FlValue) args = fl_value_new_bool(dropped);
+static void notify_drag_ended(FlutterDragOutPlugin* self, FlValue* session,
+                              gboolean dropped) {
+  g_autoptr(FlValue) args = fl_value_new_map();
+  fl_value_set_string_take(
+      args, "session",
+      session != nullptr ? fl_value_ref(session) : fl_value_new_null());
+  fl_value_set_string_take(args, "dropped", fl_value_new_bool(dropped));
   fl_method_channel_invoke_method(self->channel, "dragEnded", args, nullptr,
                                   nullptr, nullptr);
 }
@@ -120,8 +129,10 @@ static void drag_end_cb(GtkWidget* widget, GdkDragContext* context,
   FlutterDragOutPlugin* self = FLUTTER_DRAG_OUT_PLUGIN(user_data);
   if (!is_ours(self, context)) return;
   const gboolean dropped = !self->drag_failed;
+  g_autoptr(FlValue) session =
+      self->session != nullptr ? fl_value_ref(self->session) : nullptr;
   clear_drag(self);
-  notify_drag_ended(self, dropped);
+  notify_drag_ended(self, session, dropped);
 }
 
 // From now on GTK's drag grab consumes the button release, so Flutter would
@@ -152,11 +163,51 @@ static void send_synthetic_release(FlutterDragOutPlugin* self) {
   gdk_event_free(release);
 }
 
+// Accepts {session, items: [{type: "path", path}]}, or the pre-0.4.0 bare
+// list of paths (|session| stays null). Fails for anything else, including
+// item types this version does not know. |paths| borrows from |args|.
+static gboolean parse_start_drag(FlValue* args, FlValue** session,
+                                 GPtrArray* paths) {
+  *session = nullptr;
+  if (args == nullptr) return FALSE;
+  if (fl_value_get_type(args) == FL_VALUE_TYPE_LIST) {
+    const size_t length = fl_value_get_length(args);
+    for (size_t i = 0; i < length; i++) {
+      FlValue* value = fl_value_get_list_value(args, i);
+      if (fl_value_get_type(value) != FL_VALUE_TYPE_STRING) continue;
+      g_ptr_array_add(paths, const_cast<gchar*>(fl_value_get_string(value)));
+    }
+    return TRUE;
+  }
+  if (fl_value_get_type(args) != FL_VALUE_TYPE_MAP) return FALSE;
+  FlValue* items = fl_value_lookup_string(args, "items");
+  if (items == nullptr || fl_value_get_type(items) != FL_VALUE_TYPE_LIST) {
+    return FALSE;
+  }
+  const size_t length = fl_value_get_length(items);
+  for (size_t i = 0; i < length; i++) {
+    FlValue* item = fl_value_get_list_value(items, i);
+    if (fl_value_get_type(item) != FL_VALUE_TYPE_MAP) return FALSE;
+    FlValue* type = fl_value_lookup_string(item, "type");
+    FlValue* path = fl_value_lookup_string(item, "path");
+    if (type == nullptr || fl_value_get_type(type) != FL_VALUE_TYPE_STRING ||
+        strcmp(fl_value_get_string(type), "path") != 0 || path == nullptr ||
+        fl_value_get_type(path) != FL_VALUE_TYPE_STRING) {
+      return FALSE;
+    }
+    g_ptr_array_add(paths, const_cast<gchar*>(fl_value_get_string(path)));
+  }
+  *session = fl_value_lookup_string(args, "session");
+  return TRUE;
+}
+
 static FlMethodResponse* start_drag(FlutterDragOutPlugin* self,
                                     FlValue* args) {
-  if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_LIST) {
+  FlValue* session = nullptr;
+  g_autoptr(GPtrArray) paths = g_ptr_array_new();
+  if (!parse_start_drag(args, &session, paths)) {
     return FL_METHOD_RESPONSE(fl_method_error_response_new(
-        "bad_args", "Expected a list of paths", nullptr));
+        "bad_args", "Expected {session, items}", nullptr));
   }
 
   GdkModifierType state = static_cast<GdkModifierType>(0);
@@ -170,12 +221,10 @@ static FlMethodResponse* start_drag(FlutterDragOutPlugin* self,
   }
 
   GPtrArray* uris = g_ptr_array_new();
-  const size_t length = fl_value_get_length(args);
-  for (size_t i = 0; i < length; i++) {
-    FlValue* value = fl_value_get_list_value(args, i);
-    if (fl_value_get_type(value) != FL_VALUE_TYPE_STRING) continue;
-    gchar* uri =
-        g_filename_to_uri(fl_value_get_string(value), nullptr, nullptr);
+  for (guint i = 0; i < paths->len; i++) {
+    gchar* uri = g_filename_to_uri(
+        static_cast<const gchar*>(g_ptr_array_index(paths, i)), nullptr,
+        nullptr);
     if (uri != nullptr) g_ptr_array_add(uris, uri);
   }
   const guint count = uris->len;
@@ -187,6 +236,10 @@ static FlMethodResponse* start_drag(FlutterDragOutPlugin* self,
     return FL_METHOD_RESPONSE(fl_method_success_response_new(result));
   }
   self->uris = uri_list;
+  self->session =
+      session != nullptr && fl_value_get_type(session) != FL_VALUE_TYPE_NULL
+          ? fl_value_ref(session)
+          : nullptr;
 
   GtkTargetList* targets = gtk_target_list_new(nullptr, 0);
   gtk_target_list_add_uri_targets(targets, 0);
