@@ -60,7 +60,7 @@ dependencies:
   flutter_drag_out:
     git:
       url: https://github.com/jejezz/flutter_drag_out.git
-      ref: v0.3.0
+      ref: v0.4.0
 ```
 
 No native setup is required; the plugin registers itself. On Linux, building
@@ -125,6 +125,24 @@ DropTarget( // from desktop_drop
 )
 ```
 
+### Knowing when the drag ended
+
+Pass `onEnded` to learn whether another application accepted the drop:
+
+```dart
+FlutterDragOut.maybeStartOnExit(
+  details.globalPosition,
+  viewSize: viewSize,
+  paths: () => [file.path],
+  onEnded: (end) => showSnackBar(end.dropped ? 'Copied' : 'Cancelled'),
+);
+```
+
+`onEnded` runs once, when the OS drag session ends. Finder and Explorer may
+still be copying at that moment, so don't delete the dragged files there — if
+you created temporary files for the drag, remove them later (on the next
+drag, or when the app exits).
+
 ### Starting a session yourself
 
 `maybeStartOnExit` is a convenience wrapper. To decide the moment yourself,
@@ -139,8 +157,11 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
 
 | Member | Description |
 |---|---|
-| `FlutterDragOut.maybeStartOnExit(globalPosition, viewSize:, paths:)` | Starts a session once `globalPosition` is outside `Offset.zero & viewSize`. Does nothing while a session is running. |
+| `FlutterDragOut.maybeStartOnExit(globalPosition, viewSize:, paths: \| items:, onEnded:)` | Starts a session once `globalPosition` is outside `Offset.zero & viewSize`. Pass exactly one of `paths` and `items`. Does nothing while a session is running. |
 | `FlutterDragOut.start(List<String> paths)` → `Future<bool>` | Starts a session with the given absolute paths. Returns `false` if unsupported, already running, or the native side could not start. |
+| `FlutterDragOut.startItems(List<DragOutItem> items, {onEnded})` → `Future<bool>` | Like `start`, with `DragOutItem.path(...)` items and an optional `onEnded` callback, called once only if the session started. |
+| `DragOutEnd.dropped` | Passed to `onEnded`: `true` if another application accepted the drop. |
+| `FlutterDragOut.supportsPromises` | Whether file promises (files created after the drop) are available. Always `false` in this version. |
 | `FlutterDragOut.inProgress` | `true` while a session started by this plugin is running. |
 | `FlutterDragOut.isSupported` | `true` on platforms with a native implementation. |
 
