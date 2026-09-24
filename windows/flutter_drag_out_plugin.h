@@ -4,6 +4,7 @@
 // This must be included before many other Windows headers.
 #include <windows.h>
 
+#include <flutter/encodable_value.h>
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
 
