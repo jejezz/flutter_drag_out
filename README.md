@@ -36,6 +36,9 @@ session carrying file paths.
   synthesizes one so the Flutter drag ends cleanly.
 - **Know how it ended.** An optional `onEnded` callback tells you whether
   another application accepted the drop.
+- **Create files on drop (macOS).** File promises let you drag items that
+  don't exist yet — e.g. entries of an archive or files on a server — and
+  write them straight to where the user dropped.
 - **Graceful fallback.** On platforms without an implementation every call is
   a no-op and the drag simply stays inside the app.
 
@@ -62,7 +65,7 @@ dependencies:
   flutter_drag_out:
     git:
       url: https://github.com/jejezz/flutter_drag_out.git
-      ref: v0.4.0
+      ref: v0.5.0
 ```
 
 No native setup is required; the plugin registers itself. On Linux, building
@@ -145,6 +148,39 @@ still be copying at that moment, so don't delete the dragged files there — if
 you created temporary files for the drag, remove them later (on the next
 drag, or when the app exits).
 
+### Creating the files only when dropped (macOS)
+
+Some items have no local file to drag — entries inside an archive, files on
+a server. With a file promise, nothing has to exist while the user drags:
+after the drop, `write` is called with the destination path and creates the
+file (or folder) there.
+
+```dart
+FlutterDragOut.maybeStartOnExit(
+  details.globalPosition,
+  viewSize: viewSize,
+  items: () => [
+    DragOutItem.promise(
+      name: 'report.pdf',
+      write: (request) => downloadTo(request.targetPath),
+    ),
+  ],
+);
+```
+
+- `request.targetPath` is the final destination on macOS
+  (`request.isFinalDestination` is `true`). Finder already picks a free name
+  there (e.g. `report 2.pdf`), so the app doesn't have to handle name
+  clashes; still don't overwrite blindly, as other receivers may not.
+- Throw from `write` to report failure. Check `request.isCancelled` in long
+  writes.
+- `write` may run after `onEnded`: Finder asks for the files once the drop
+  has ended the drag session.
+- Check `FlutterDragOut.supportsPromises` first. Where it is `false`
+  (Windows and Linux for now), `startItems` refuses promises, so drag paths
+  you prepared in advance instead. Promises and paths can be mixed in one
+  drag.
+
 ### Starting a session yourself
 
 `maybeStartOnExit` is a convenience wrapper. To decide the moment yourself,
@@ -163,7 +199,9 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
 | `FlutterDragOut.start(List<String> paths)` → `Future<bool>` | Starts a session with the given absolute paths. Returns `false` if unsupported, already running, or the native side could not start. |
 | `FlutterDragOut.startItems(List<DragOutItem> items, {onEnded})` → `Future<bool>` | Like `start`, with `DragOutItem.path(...)` items and an optional `onEnded` callback, called once only if the session started. |
 | `DragOutEnd.dropped` | Passed to `onEnded`: `true` if another application accepted the drop. |
-| `FlutterDragOut.supportsPromises` | Whether file promises (files created after the drop) are available. Always `false` in this version. |
+| `DragOutItem.promise(name:, isDirectory:, write:)` | An item created by `write` after the drop. See "Creating the files only when dropped". |
+| `DragOutWriteRequest` | Passed to `write`: `targetPath`, `isFinalDestination`, `isCancelled`. |
+| `FlutterDragOut.supportsPromises` | Whether file promises are available: `true` on macOS, `false` on Windows and Linux for now. |
 | `FlutterDragOut.inProgress` | `true` while a session started by this plugin is running. |
 | `FlutterDragOut.isSupported` | `true` on platforms with a native implementation. |
 
@@ -192,9 +230,11 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
 
 - **Local paths only.** Paths must exist on the local file system (mounted
   network drives count). Files that must be downloaded first, such as items
-  on FTP or WebDAV, are not supported — copy them locally first. File
-  promises (files the app creates only after the drop) are planned; see the
-  [design notes](doc/design/end-callback-and-file-promises.md).
+  on FTP or WebDAV, need a file promise (macOS) or a local copy first.
+- **File promises: macOS only for now.** Windows is planned; see the
+  [design notes](doc/design/end-callback-and-file-promises.md). Some
+  applications (e.g. browser upload areas) accept only real files and reject
+  promised items.
 - **One-way hand-over.** After the pointer leaves the window the drag cannot
   return to your in-app `DragTarget`s.
 - **Copy only.** Moving files to another application is intentionally not
@@ -208,7 +248,9 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
 
 The [`example/`](example/lib/main.dart) app lists a few sample files. Drop them
 on the in-app target, or drag them out to Finder / Explorer / your file manager — alone or several at once
-(tick the checkboxes). The status line shows how each drag out ended.
+(tick the checkboxes). On macOS it also lists items that are created only
+when dropped: a text file, a folder, and a slow file that takes 3 seconds.
+The status line shows how each drag out ended.
 
 ```sh
 cd example

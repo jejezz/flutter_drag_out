@@ -19,6 +19,17 @@ import 'package:flutter/services.dart';
 sealed class DragOutItem {
   /// A file or directory that already exists at the absolute local [path].
   const factory DragOutItem.path(String path) = DragOutPath;
+
+  /// A file or directory that [write] creates only after the drop (a file
+  /// promise), so nothing has to exist on disk while the user drags.
+  ///
+  /// [name] is the name it gets at the destination (no path separators).
+  /// Only available where [FlutterDragOut.supportsPromises] is `true`.
+  const factory DragOutItem.promise({
+    required String name,
+    bool isDirectory,
+    required Future<void> Function(DragOutWriteRequest request) write,
+  }) = DragOutPromise;
 }
 
 /// A [DragOutItem] for a file or directory that already exists on disk.
@@ -39,13 +50,60 @@ final class DragOutPath implements DragOutItem {
   String toString() => 'DragOutItem.path($path)';
 }
 
+/// A [DragOutItem] whose file or directory is created by [write] after the
+/// drop.
+final class DragOutPromise implements DragOutItem {
+  /// Creates a promised item named [name].
+  const DragOutPromise({required this.name, this.isDirectory = false, required this.write});
+
+  /// Name of the file or directory at the destination.
+  final String name;
+
+  /// Whether [write] creates a directory rather than a file.
+  final bool isDirectory;
+
+  /// Creates the file or directory at [DragOutWriteRequest.targetPath].
+  ///
+  /// Throw to report failure; the target application is told the item could
+  /// not be delivered.
+  final Future<void> Function(DragOutWriteRequest request) write;
+
+  @override
+  String toString() => 'DragOutItem.promise($name${isDirectory ? '/' : ''})';
+}
+
+/// A request to fulfil one [DragOutPromise], passed to its `write`.
+final class DragOutWriteRequest {
+  DragOutWriteRequest._(this.targetPath, this.isFinalDestination, this._session);
+
+  /// Create the promised file (or directory) at exactly this path. Its parent
+  /// directory already exists.
+  final String targetPath;
+
+  /// `true` if [targetPath] is where the user dropped (macOS). Finder picks a
+  /// name that is not taken there (e.g. `report 2.pdf`); other receivers may
+  /// not, so don't overwrite an existing entry blindly.
+  /// `false` if it is a staging location the OS copies from afterwards.
+  final bool isFinalDestination;
+
+  final _Session _session;
+
+  /// Whether the user cancelled the drop while it was being written. Check
+  /// it between chunks of a long write and stop (e.g. by throwing).
+  bool get isCancelled => _session.cancelled;
+
+  @override
+  String toString() => 'DragOutWriteRequest($targetPath, final: $isFinalDestination)';
+}
+
 /// How a drag session ended. Passed to `onEnded` exactly once per session
 /// that started.
 ///
 /// This is the moment the OS drag session ended, *not* the moment the target
 /// finished reading the files: Finder and Explorer may copy asynchronously
-/// after accepting the drop. Don't delete files right away in `onEnded`;
-/// clean up temporary files later (e.g. on the next drag or at app exit).
+/// after accepting the drop, and promised items may still be written after
+/// it. Don't delete files right away in `onEnded`; clean up temporary files
+/// later (e.g. on the next drag or at app exit).
 final class DragOutEnd {
   /// Creates a session result.
   const DragOutEnd({required this.dropped});
@@ -66,10 +124,21 @@ final class DragOutEnd {
 }
 
 class _Session {
-  _Session(this.id, this.onEnded);
+  _Session(this.id, this.onEnded, this.promises);
 
   final int id;
   final void Function(DragOutEnd end)? onEnded;
+
+  /// Promised items by the ID sent to the native side; removed once their
+  /// write starts.
+  final Map<int, DragOutPromise> promises;
+
+  /// Writes that started and have not finished yet.
+  int writing = 0;
+  bool cancelled = false;
+
+  /// Whether nothing is left to write or being written.
+  bool get isSettled => promises.isEmpty && writing == 0;
 }
 
 /// Entry point of the plugin. All members are static.
@@ -79,18 +148,24 @@ abstract final class FlutterDragOut {
   static bool _handlerInstalled = false;
   static bool _inProgress = false;
   static int _nextSessionId = 1;
+
+  /// The session whose OS drag is running.
   static _Session? _session;
+
+  /// Sessions that still have promises to write or being written, by ID. On
+  /// macOS the target asks for them after the drag session ended.
+  static final _sessionsWithPromises = <int, _Session>{};
 
   /// Whether this platform has a native implementation.
   ///
   /// On other platforms every call is a no-op that returns `false`.
   static bool get isSupported => !kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux);
 
-  /// Whether this platform can drag items whose files are created only after
-  /// the drop (file promises).
+  /// Whether this platform supports [DragOutItem.promise] (macOS for now).
   ///
-  /// Always `false` for now; reserved so apps can already branch on it.
-  static bool get supportsPromises => false;
+  /// Where it is `false`, [startItems] refuses items with promises, so fall
+  /// back to paths prepared in advance.
+  static bool get supportsPromises => !kIsWeb && Platform.isMacOS;
 
   /// Whether a drag session started by this plugin is still running.
   ///
@@ -115,36 +190,61 @@ abstract final class FlutterDragOut {
   /// outside the window).
   ///
   /// Returns `true` if the session started. Only then is [onEnded] called,
-  /// exactly once, after [inProgress] has gone back to `false`.
+  /// exactly once, after [inProgress] has gone back to `false`. Returns
+  /// `false` without starting if [items] contains a [DragOutItem.promise]
+  /// and [supportsPromises] is `false`.
+  ///
+  /// Throws an [ArgumentError] if a promise's name is empty, `.`, `..` or
+  /// contains a path separator.
   static Future<bool> startItems(List<DragOutItem> items, {void Function(DragOutEnd end)? onEnded}) async {
+    for (final item in items) {
+      if (item is DragOutPromise) _checkPromiseName(item.name);
+    }
     if (!isSupported || _inProgress || items.isEmpty) return false;
+    final hasPromises = items.any((item) => item is DragOutPromise);
+    if (hasPromises && !supportsPromises) return false;
     _installHandler();
     _inProgress = true;
+
+    final promises = <int, DragOutPromise>{};
+    final wireItems = <Map<String, Object>>[];
+    for (final item in items) {
+      switch (item) {
+        case DragOutPath(:final path):
+          wireItems.add({'type': 'path', 'path': path});
+        case DragOutPromise(:final name, :final isDirectory):
+          final id = promises.length;
+          promises[id] = item;
+          wireItems.add({'type': 'promise', 'id': id, 'name': name, 'directory': isDirectory});
+      }
+    }
     // Registered before the call: the end notification must find it even if
     // it were delivered before the call's own result.
-    final session = _session = _Session(_nextSessionId++, onEnded);
-    final arguments = {
-      'session': session.id,
-      'items': [
-        for (final item in items)
-          switch (item) {
-            DragOutPath(:final path) => {'type': 'path', 'path': path},
-          },
-      ],
-    };
+    final session = _session = _Session(_nextSessionId++, onEnded, promises);
+    if (hasPromises) _sessionsWithPromises[session.id] = session;
+
     bool started;
     try {
-      started = await _channel.invokeMethod<bool>('startDrag', arguments) ?? false;
+      started = await _channel.invokeMethod<bool>('startDrag', {'session': session.id, 'items': wireItems}) ?? false;
     } on PlatformException {
       started = false;
     } on MissingPluginException {
       started = false;
     }
-    if (!started && identical(_session, session)) {
-      _session = null;
-      _inProgress = false;
+    if (!started) {
+      _sessionsWithPromises.remove(session.id);
+      if (identical(_session, session)) {
+        _session = null;
+        _inProgress = false;
+      }
     }
     return started;
+  }
+
+  static void _checkPromiseName(String name) {
+    if (name.isEmpty || name == '.' || name == '..' || name.contains('/') || name.contains(r'\')) {
+      throw ArgumentError.value(name, 'name', 'must be a plain file name');
+    }
   }
 
   /// Call from `Draggable.onDragUpdate`. Starts a native drag session once
@@ -186,7 +286,15 @@ abstract final class FlutterDragOut {
     if (_handlerInstalled) return;
     _handlerInstalled = true;
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'dragEnded') _handleDragEnded(call.arguments);
+      switch (call.method) {
+        case 'dragEnded':
+          _handleDragEnded(call.arguments);
+        case 'writePromise':
+          await _handleWritePromise(call.arguments);
+        case 'cancelPromises':
+          _handleCancelPromises(call.arguments);
+      }
+      return null;
     });
   }
 
@@ -202,6 +310,9 @@ abstract final class FlutterDragOut {
     if (session == null || (sessionId != null && sessionId != session.id)) return;
     _session = null;
     _inProgress = false;
+    // Nothing will be written for a session that was not dropped.
+    if (!dropped) session.promises.clear();
+    if (session.isSettled) _sessionsWithPromises.remove(session.id);
     final onEnded = session.onEnded;
     if (onEnded == null) return;
     try {
@@ -218,12 +329,47 @@ abstract final class FlutterDragOut {
     }
   }
 
+  static Future<void> _handleWritePromise(Object? arguments) async {
+    if (arguments case {
+      'session': final int sessionId,
+      'id': final int id,
+      'targetPath': final String targetPath,
+      'final': final bool isFinal,
+    }) {
+      final session = _sessionsWithPromises[sessionId];
+      final promise = session?.promises.remove(id);
+      if (session == null || promise == null) {
+        throw PlatformException(code: 'unknown_promise', message: 'No pending promise $id in session $sessionId');
+      }
+      session.writing++;
+      try {
+        await promise.write(DragOutWriteRequest._(targetPath, isFinal, session));
+      } catch (error) {
+        // Expected failures (e.g. the app gave up after isCancelled) are the
+        // app's to report; the target application is told it failed.
+        throw PlatformException(code: 'write_failed', message: '$error');
+      } finally {
+        session.writing--;
+        if (session.isSettled) _sessionsWithPromises.remove(sessionId);
+      }
+      return;
+    }
+    throw PlatformException(code: 'bad_args', message: 'Expected {session, id, targetPath, final}');
+  }
+
+  static void _handleCancelPromises(Object? arguments) {
+    if (arguments case {'session': final int sessionId}) {
+      _sessionsWithPromises[sessionId]?.cancelled = true;
+    }
+  }
+
   /// Resets internal state. For tests only.
   @visibleForTesting
   static void debugReset() {
     _inProgress = false;
     _handlerInstalled = false;
     _session = null;
+    _sessionsWithPromises.clear();
     _nextSessionId = 1;
   }
 }
