@@ -34,6 +34,8 @@ session carrying file paths.
   are rejected.
 - **No stuck drags.** The OS drag loop swallows the mouse-up; the plugin
   synthesizes one so the Flutter drag ends cleanly.
+- **Know how it ended.** An optional `onEnded` callback tells you whether
+  another application accepted the drop.
 - **Graceful fallback.** On platforms without an implementation every call is
   a no-op and the drag simply stays inside the app.
 
@@ -183,13 +185,16 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
    outside the window. Nothing accepts the drop there, so your Flutter drag
    is cancelled cleanly.
 4. The OS offers *copy* to other applications and rejects drops back into
-   your app. When the session ends, `inProgress` goes back to `false`.
+   your app. When the session ends, `inProgress` goes back to `false` and
+   `onEnded`, if given, is called with whether the drop was accepted.
 
 ## Limitations
 
 - **Local paths only.** Paths must exist on the local file system (mounted
   network drives count). Files that must be downloaded first, such as items
-  on FTP or WebDAV, are not supported — copy them locally first.
+  on FTP or WebDAV, are not supported — copy them locally first. File
+  promises (files the app creates only after the drop) are planned; see the
+  [design notes](doc/design/end-callback-and-file-promises.md).
 - **One-way hand-over.** After the pointer leaves the window the drag cannot
   return to your in-app `DragTarget`s.
 - **Copy only.** Moving files to another application is intentionally not
@@ -203,7 +208,7 @@ final started = await FlutterDragOut.start(['/Users/me/report.pdf']);
 
 The [`example/`](example/lib/main.dart) app lists a few sample files. Drop them
 on the in-app target, or drag them out to Finder / Explorer / your file manager — alone or several at once
-(tick the checkboxes).
+(tick the checkboxes). The status line shows how each drag out ended.
 
 ```sh
 cd example
