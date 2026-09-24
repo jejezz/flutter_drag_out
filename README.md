@@ -169,8 +169,9 @@ FlutterDragOut.maybeStartOnExit(
 ```
 
 - `request.targetPath` is the final destination on macOS
-  (`request.isFinalDestination` is `true`); decide what to do if something
-  with that name is already there.
+  (`request.isFinalDestination` is `true`). Finder already picks a free name
+  there (e.g. `report 2.pdf`), so the app doesn't have to handle name
+  clashes; still don't overwrite blindly, as other receivers may not.
 - Throw from `write` to report failure. Check `request.isCancelled` in long
   writes.
 - `write` may run after `onEnded`: Finder asks for the files once the drop

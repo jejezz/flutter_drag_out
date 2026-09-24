@@ -80,8 +80,9 @@ final class DragOutWriteRequest {
   /// directory already exists.
   final String targetPath;
 
-  /// `true` if [targetPath] is where the user dropped (macOS): an existing
-  /// entry there is the user's own file, so handle a name clash carefully.
+  /// `true` if [targetPath] is where the user dropped (macOS). Finder picks a
+  /// name that is not taken there (e.g. `report 2.pdf`); other receivers may
+  /// not, so don't overwrite an existing entry blindly.
   /// `false` if it is a staging location the OS copies from afterwards.
   final bool isFinalDestination;
 
