@@ -1,3 +1,19 @@
+## 0.5.0
+
+* File promises on macOS: `DragOutItem.promise(name:, isDirectory:, write:)`
+  drags an item that does not exist yet. After the drop, `write` receives a
+  `DragOutWriteRequest` whose `targetPath` is the final destination
+  (`isFinalDestination: true`), so the app can create the file or folder
+  right there — nothing has to be prepared before the drag, and there is no
+  temporary copy. Built on `NSFilePromiseProvider`; promises and paths can be
+  mixed in one drag.
+* `FlutterDragOut.supportsPromises` is now `true` on macOS. On Windows and
+  Linux it stays `false` and `startItems` refuses items with promises (returns
+  `false`), so apps can fall back to paths prepared in advance.
+* `write` may run after `onEnded` (Finder asks for the files after the drop
+  ended the session). A throwing `write` tells the target the item failed.
+* Promise names must be plain file names (`ArgumentError` otherwise).
+
 ## 0.4.0
 
 * `onEnded` callback on `maybeStartOnExit` and the new `startItems`: called

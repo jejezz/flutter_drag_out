@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -209,8 +210,128 @@ void main() {
       expect(FlutterDragOut.inProgress, isFalse);
     });
 
-    test('does not support promises yet', () {
-      expect(FlutterDragOut.supportsPromises, isFalse);
+    test('supports promises on macOS only', () {
+      expect(FlutterDragOut.supportsPromises, Platform.isMacOS);
+    });
+
+    Future<Object?> sendWritePromise(int session, int id, String targetPath) async {
+      ByteData? reply;
+      await messenger.handlePlatformMessage(
+        channel.name,
+        channel.codec.encodeMethodCall(
+          MethodCall('writePromise', {'session': session, 'id': id, 'targetPath': targetPath, 'final': true}),
+        ),
+        (data) => reply = data,
+      );
+      try {
+        return channel.codec.decodeEnvelope(reply!);
+      } on PlatformException catch (e) {
+        return e;
+      }
+    }
+
+    test('rejects promise names that are not plain file names', () {
+      for (final name in ['', '.', '..', 'a/b', r'a\b']) {
+        expect(
+          () => FlutterDragOut.startItems([DragOutItem.promise(name: name, write: (_) async {})]),
+          throwsArgumentError,
+          reason: name,
+        );
+      }
+      expect(calls, isEmpty);
+    });
+
+    group('promises', () {
+      test('are refused where unsupported', () async {
+        final started = await FlutterDragOut.startItems([DragOutItem.promise(name: 'a.txt', write: (_) async {})]);
+        expect(started, isFalse);
+        expect(calls, isEmpty);
+        expect(FlutterDragOut.inProgress, isFalse);
+      }, skip: Platform.isMacOS);
+
+      test('are sent with IDs next to paths', () async {
+        await FlutterDragOut.startItems([
+          const DragOutItem.path('/tmp/a.txt'),
+          DragOutItem.promise(name: 'b.txt', write: (_) async {}),
+          DragOutItem.promise(name: 'dir', isDirectory: true, write: (_) async {}),
+        ]);
+        expect(calls.single.arguments, {
+          'session': 1,
+          'items': [
+            {'type': 'path', 'path': '/tmp/a.txt'},
+            {'type': 'promise', 'id': 0, 'name': 'b.txt', 'directory': false},
+            {'type': 'promise', 'id': 1, 'name': 'dir', 'directory': true},
+          ],
+        });
+      }, skip: !Platform.isMacOS);
+
+      test('are written on request, also after the session ended', () async {
+        final requests = <DragOutWriteRequest>[];
+        await FlutterDragOut.startItems([
+          DragOutItem.promise(name: 'a.txt', write: (r) async => requests.add(r)),
+          DragOutItem.promise(name: 'b.txt', write: (r) async => requests.add(r)),
+        ]);
+        // On macOS the target asks for the files after the drop ended the session.
+        await sendDragEndedFor(1, dropped: true);
+        expect(FlutterDragOut.inProgress, isFalse);
+
+        expect(await sendWritePromise(1, 1, '/dest/b.txt'), isNull);
+        expect(await sendWritePromise(1, 0, '/dest/a.txt'), isNull);
+        expect([for (final r in requests) r.targetPath], ['/dest/b.txt', '/dest/a.txt']);
+        expect(requests.first.isFinalDestination, isTrue);
+        expect(requests.first.isCancelled, isFalse);
+      }, skip: !Platform.isMacOS);
+
+      test('report a failed write back to the native side', () async {
+        await FlutterDragOut.startItems([
+          DragOutItem.promise(name: 'a.txt', write: (_) async => throw const FileSystemException('disk full')),
+        ]);
+        final reply = await sendWritePromise(1, 0, '/dest/a.txt');
+        expect(reply, isA<PlatformException>().having((e) => e.code, 'code', 'write_failed'));
+      }, skip: !Platform.isMacOS);
+
+      test('are written at most once, and not after an unaccepted drop', () async {
+        var writes = 0;
+        await FlutterDragOut.startItems([DragOutItem.promise(name: 'a.txt', write: (_) async => writes++)]);
+        expect(await sendWritePromise(1, 0, '/dest/a.txt'), isNull);
+        expect(await sendWritePromise(1, 0, '/dest/a.txt'), isA<PlatformException>());
+        expect(writes, 1);
+
+        await sendDragEndedFor(1, dropped: true);
+        await FlutterDragOut.startItems([DragOutItem.promise(name: 'b.txt', write: (_) async => writes++)]);
+        await sendDragEndedFor(2, dropped: false);
+        expect(
+          await sendWritePromise(2, 0, '/dest/b.txt'),
+          isA<PlatformException>().having((e) => e.code, 'code', 'unknown_promise'),
+        );
+        expect(writes, 1);
+      }, skip: !Platform.isMacOS);
+
+      test('see cancellation through isCancelled', () async {
+        DragOutWriteRequest? request;
+        final release = Completer<void>();
+        await FlutterDragOut.startItems([
+          DragOutItem.promise(
+            name: 'a.txt',
+            write: (r) async {
+              request = r;
+              await release.future;
+            },
+          ),
+        ]);
+        final reply = sendWritePromise(1, 0, '/dest/a.txt');
+        await pumpEventQueue();
+        expect(request!.isCancelled, isFalse);
+
+        await messenger.handlePlatformMessage(
+          channel.name,
+          channel.codec.encodeMethodCall(const MethodCall('cancelPromises', {'session': 1})),
+          (_) {},
+        );
+        expect(request!.isCancelled, isTrue);
+        release.complete();
+        expect(await reply, isNull);
+      }, skip: !Platform.isMacOS);
     });
   }, skip: !(Platform.isMacOS || Platform.isWindows || Platform.isLinux));
 }

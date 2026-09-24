@@ -41,6 +41,53 @@ class _ExamplePageState extends State<ExamplePage> {
 
   String _name(String path) => path.split(Platform.pathSeparator).last;
 
+  /// Items that don't exist until they are dropped (file promises, macOS).
+  late final List<(IconData, DragOutPromise)> _promises = [
+    (
+      Icons.note_add,
+      DragOutPromise(
+        name: 'generated.txt',
+        write: (request) async {
+          await File(request.targetPath).writeAsString('Created on drop at ${DateTime.now()}\n');
+          _report('Wrote ${request.targetPath}');
+        },
+      ),
+    ),
+    (
+      Icons.create_new_folder,
+      DragOutPromise(
+        name: 'generated folder',
+        isDirectory: true,
+        write: (request) async {
+          final dir = await Directory(request.targetPath).create();
+          for (var i = 1; i <= 3; i++) {
+            await File('${dir.path}/file $i.txt').writeAsString('File $i\n');
+          }
+          _report('Wrote ${request.targetPath}');
+        },
+      ),
+    ),
+    (
+      Icons.hourglass_bottom,
+      DragOutPromise(
+        name: 'slow.txt',
+        write: (request) async {
+          _report('Writing slow.txt (3 s)...');
+          for (var i = 0; i < 30; i++) {
+            if (request.isCancelled) throw StateError('cancelled');
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+          await File(request.targetPath).writeAsString('Took a while\n');
+          _report('Wrote ${request.targetPath}');
+        },
+      ),
+    ),
+  ];
+
+  void _report(String status) {
+    if (mounted) setState(() => _status = status);
+  }
+
   @override
   Widget build(BuildContext context) {
     final viewSize = MediaQuery.sizeOf(context);
@@ -84,6 +131,27 @@ class _ExamplePageState extends State<ExamplePage> {
                       title: Text(_name(entity.path)),
                     ),
                   ),
+                if (FlutterDragOut.supportsPromises) ...[
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+                    child: Text('Created only when dropped (file promises):'),
+                  ),
+                  for (final (icon, promise) in _promises)
+                    Draggable<String>(
+                      data: promise.name,
+                      onDragUpdate: (details) => FlutterDragOut.maybeStartOnExit(
+                        details.globalPosition,
+                        viewSize: viewSize,
+                        items: () => [promise],
+                        onEnded: (end) => _report(end.dropped ? 'Dropped ${promise.name}' : 'Drag out cancelled.'),
+                      ),
+                      feedback: Material(
+                        elevation: 4,
+                        child: Padding(padding: const EdgeInsets.all(8), child: Text(promise.name)),
+                      ),
+                      child: ListTile(leading: Icon(icon), title: Text(promise.name)),
+                    ),
+                ],
               ],
             ),
           ),
