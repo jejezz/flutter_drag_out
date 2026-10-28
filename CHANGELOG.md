@@ -1,3 +1,10 @@
+## 0.5.1
+
+* Windows: starting a drag of files on a network share (UNC path or mapped
+  drive) no longer stalls the app. The drag image's icon is now chosen by file
+  name instead of asking the shell to open the file over the network, which ran
+  on the UI thread at the moment the pointer left the window.
+
 ## 0.5.0
 
 * File promises on macOS: `DragOutItem.promise(name:, isDirectory:, write:)`

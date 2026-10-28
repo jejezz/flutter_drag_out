@@ -124,6 +124,29 @@ bool SetHGlobal(IDataObject* data_object, CLIPFORMAT format, HGLOBAL handle) {
   return true;
 }
 
+// Whether |path| lives on a network share (UNC path or a mapped drive). Only
+// looks at the path and the drive type, so it never touches the network.
+bool IsNetworkPath(const std::wstring& path) {
+  if (path.size() >= 2 && path[0] == L'\\' && path[1] == L'\\') {
+    // "\\?\C:\..." and "\\.\..." name local paths; "\\?\UNC\..." is a share.
+    if (path.size() >= 4 && (path[2] == L'?' || path[2] == L'.') &&
+        path[3] == L'\\') {
+      if (path.compare(4, 4, L"UNC\\") == 0) return true;
+      if (path.size() >= 6 && path[5] == L':') {
+        const wchar_t root[] = {path[4], L':', L'\\', L'\0'};
+        return ::GetDriveTypeW(root) == DRIVE_REMOTE;
+      }
+      return false;
+    }
+    return true;
+  }
+  if (path.size() >= 2 && path[1] == L':') {
+    const wchar_t root[] = {path[0], L':', L'\\', L'\0'};
+    return ::GetDriveTypeW(root) == DRIVE_REMOTE;
+  }
+  return false;
+}
+
 // Shows the first item's shell icon under the cursor. Best effort: without it
 // Windows still shows the regular drag cursor.
 void SetDragImage(IDataObject* data_object, const std::wstring& path) {
@@ -133,9 +156,25 @@ void SetDragImage(IDataObject* data_object, const std::wstring& path) {
                                 IID_PPV_ARGS(&helper)))) {
     return;
   }
+  // This runs on the UI thread right as the pointer leaves the window. For a
+  // file on a network share, asking the shell for its icon opens the file over
+  // the network (and may run icon handlers on it), which can stall the whole
+  // app. For those, pick the icon by file name alone.
+  UINT icon_flags = SHGFI_ICON | SHGFI_LARGEICON;
+  DWORD attributes = 0;
+  if (IsNetworkPath(path)) {
+    const size_t name_start = path.find_last_of(L"\\/");
+    const std::wstring name =
+        name_start == std::wstring::npos ? path : path.substr(name_start + 1);
+    // Without an extension it is most likely a folder.
+    attributes = name.find(L'.') == std::wstring::npos
+                     ? FILE_ATTRIBUTE_DIRECTORY
+                     : FILE_ATTRIBUTE_NORMAL;
+    icon_flags |= SHGFI_USEFILEATTRIBUTES;
+  }
   SHFILEINFOW file_info = {};
-  if (!::SHGetFileInfoW(path.c_str(), 0, &file_info, sizeof(file_info),
-                        SHGFI_ICON | SHGFI_LARGEICON) ||
+  if (!::SHGetFileInfoW(path.c_str(), attributes, &file_info,
+                        sizeof(file_info), icon_flags) ||
       !file_info.hIcon) {
     helper->Release();
     return;
